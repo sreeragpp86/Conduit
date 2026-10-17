@@ -1,0 +1,8 @@
+# Conduit Backend
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+dist/
