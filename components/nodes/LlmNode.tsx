@@ -58,8 +58,9 @@ function LlmNodeComponent({ id, data }: NodeProps<LlmFlowNode>) {
           <p className="text-xs font-semibold text-white/90 truncate">{data.label}</p>
           <p className="text-[10px] text-white/30 font-mono">type:llm_inference</p>
         </div>
-        <NodeStatusRing status={data.status} />
+        <NodeStatusRing status={data.status} duration_ms={data.duration_ms} />
       </div>
+
 
       {/* Body */}
       <div className="px-4 py-3 space-y-3">

@@ -5,6 +5,7 @@ Serves the /api/execute SSE endpoint that drives the React Flow frontend.
 
 import asyncio
 import json
+import time
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, HTTPException
@@ -13,6 +14,8 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 from schemas import DAGPayload, FlowNode
 from dag import topological_sort, resolve_execution_order
+from executor import execute_node
+
 
 app = FastAPI(
     title="Conduit DAG Engine",
@@ -133,15 +136,26 @@ async def execute_dag(payload: DAGPayload) -> StreamingResponse:
                 if pid in context_store
             }
 
-            # Simulate async compute (Phase 3: replace with real LLM call)
-            await asyncio.sleep(0.8)
-
-            # Produce this node's output
-            result = _simulate_node_output(node, parent_outputs)
+            # Execute node logic with latency telemetry
+            start_t = time.perf_counter()
+            result = await execute_node(
+                node_id=node.id,
+                node_type=node.type,
+                data=node.data,
+                parent_outputs=parent_outputs,
+                api_keys=payload.api_keys,
+            )
+            duration_ms = round((time.perf_counter() - start_t) * 1000)
             context_store[node_id] = result
 
-            # Signal COMPLETED with the produced output
-            yield _sse({"node_id": node_id, "status": "COMPLETED", "output": result})
+            # Signal COMPLETED with the produced output and duration_ms telemetry
+            yield _sse({
+                "node_id": node_id,
+                "status": "COMPLETED",
+                "output": result,
+                "duration_ms": duration_ms,
+            })
+
 
         # --- Pipeline done ---
         yield _sse({"event": "PIPELINE_COMPLETE"})

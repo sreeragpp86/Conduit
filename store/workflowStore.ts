@@ -16,6 +16,7 @@ export interface PromptNodeData extends Record<string, unknown> {
   label: string;
   prompt: string;
   status: NodeStatus;
+  duration_ms?: number;
 }
 
 export interface LlmNodeData extends Record<string, unknown> {
@@ -23,15 +24,22 @@ export interface LlmNodeData extends Record<string, unknown> {
   model: string;
   systemInstruction: string;
   status: NodeStatus;
+  duration_ms?: number;
 }
 
 export interface OutputNodeData extends Record<string, unknown> {
   label: string;
   output: string;
   status: NodeStatus;
+  duration_ms?: number;
 }
 
 export type WorkflowNodeData = PromptNodeData | LlmNodeData | OutputNodeData;
+
+export interface ApiKeys {
+  groq?: string;
+  gemini?: string;
+}
 
 const defaultNodes: Node<WorkflowNodeData>[] = [
   {
@@ -86,44 +94,68 @@ const defaultEdges: Edge[] = [
   },
 ];
 
-let nodeCounter = 2;
+let nodeCounter = 3;
 
 interface WorkflowState {
   nodes: Node<WorkflowNodeData>[];
   edges: Edge[];
   isExecuting: boolean;
+  apiKeys: ApiKeys;
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
+  onNodesDelete: (deleted: Node[]) => void;
   addPromptNode: () => void;
   addLlmNode: () => void;
   addOutputNode: () => void;
-  setNodeStatus: (id: string, status: NodeStatus) => void;
+  setNodeStatus: (id: string, status: NodeStatus, duration_ms?: number) => void;
   setNodeOutput: (id: string, output: string) => void;
   updateNodeData: (id: string, data: Partial<WorkflowNodeData>) => void;
   setEdgesAnimated: (animated: boolean) => void;
   setIsExecuting: (v: boolean) => void;
   resetNodeStatuses: () => void;
+  resetWorkflow: () => void;
+  setApiKeys: (keys: ApiKeys) => void;
 }
 
 export const useWorkflowStore = create<WorkflowState>((set) => ({
   nodes: defaultNodes,
   edges: defaultEdges,
   isExecuting: false,
+  apiKeys: {},
 
   onNodesChange: (changes) =>
-    set((state) => ({ nodes: applyNodeChanges(changes, state.nodes) as Node<WorkflowNodeData>[] })),
+    set((state) => ({
+      nodes: applyNodeChanges(changes, state.nodes) as Node<WorkflowNodeData>[],
+    })),
 
   onEdgesChange: (changes) =>
-    set((state) => ({ edges: applyEdgeChanges(changes, state.edges) })),
+    set((state) => ({
+      edges: applyEdgeChanges(changes, state.edges),
+    })),
 
   onConnect: (connection) =>
     set((state) => ({
       edges: addEdge(
-        { ...connection, type: 'smoothstep', animated: false, style: { stroke: '#52525B', strokeWidth: 2 } },
+        {
+          ...connection,
+          type: 'smoothstep',
+          animated: false,
+          style: { stroke: '#52525B', strokeWidth: 2 },
+        },
         state.edges
       ),
     })),
+
+  onNodesDelete: (deleted) =>
+    set((state) => {
+      const deletedIds = new Set(deleted.map((d) => d.id));
+      return {
+        edges: state.edges.filter(
+          (edge) => !deletedIds.has(edge.source) && !deletedIds.has(edge.target)
+        ),
+      };
+    }),
 
   addPromptNode: () =>
     set((state) => {
@@ -134,7 +166,7 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
           {
             id,
             type: 'promptNode',
-            position: { x: Math.random() * 400 + 100, y: Math.random() * 300 + 100 },
+            position: { x: Math.random() * 300 + 100, y: Math.random() * 250 + 100 },
             data: { label: 'Prompt Input', prompt: '', status: 'IDLE' } as PromptNodeData,
           },
         ],
@@ -150,7 +182,7 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
           {
             id,
             type: 'llmNode',
-            position: { x: Math.random() * 400 + 300, y: Math.random() * 300 + 100 },
+            position: { x: Math.random() * 300 + 350, y: Math.random() * 250 + 100 },
             data: {
               label: 'LLM Agent',
               model: 'gemini-2.5-flash',
@@ -171,17 +203,26 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
           {
             id,
             type: 'outputNode',
-            position: { x: Math.random() * 400 + 600, y: Math.random() * 300 + 100 },
+            position: { x: Math.random() * 300 + 600, y: Math.random() * 250 + 100 },
             data: { label: 'Output', output: '', status: 'IDLE' } as OutputNodeData,
           },
         ],
       };
     }),
 
-  setNodeStatus: (id, status) =>
+  setNodeStatus: (id, status, duration_ms) =>
     set((state) => ({
       nodes: state.nodes.map((n) =>
-        n.id === id ? { ...n, data: { ...n.data, status } } : n
+        n.id === id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                status,
+                ...(duration_ms !== undefined ? { duration_ms } : {}),
+              },
+            }
+          : n
       ),
     })),
 
@@ -220,8 +261,30 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
         data: {
           ...n.data,
           status: 'IDLE' as NodeStatus,
+          duration_ms: undefined,
           ...(n.type === 'outputNode' ? { output: '' } : {}),
         },
       })),
     })),
+
+  resetWorkflow: () =>
+    set((state) => ({
+      nodes: state.nodes.map((n) => ({
+        ...n,
+        data: {
+          ...n.data,
+          status: 'IDLE' as NodeStatus,
+          duration_ms: undefined,
+          ...(n.type === 'outputNode' ? { output: '' } : {}),
+        },
+      })),
+      edges: state.edges.map((e) => ({
+        ...e,
+        animated: false,
+        style: { ...e.style, stroke: '#52525B' },
+      })),
+      isExecuting: false,
+    })),
+
+  setApiKeys: (keys) => set({ apiKeys: keys }),
 }));

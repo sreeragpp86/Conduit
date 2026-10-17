@@ -16,6 +16,7 @@ import { PromptNode } from '@/components/nodes/PromptNode';
 import { LlmNode } from '@/components/nodes/LlmNode';
 import { OutputNode } from '@/components/nodes/OutputNode';
 import { TopBar } from '@/components/TopBar';
+import { StatusFooter } from '@/components/StatusFooter';
 
 // ⚠️ CRITICAL: Must be at module scope — never inside the component.
 // Defining nodeTypes inside the component causes React Flow to re-render infinitely.
@@ -26,29 +27,44 @@ const nodeTypes: NodeTypes = {
 };
 
 export function WorkflowCanvas() {
-  const { nodes, edges, onNodesChange, onEdgesChange, onConnect } = useWorkflowStore();
+  const {
+    nodes,
+    edges,
+    onNodesChange,
+    onEdgesChange,
+    onConnect,
+    onNodesDelete,
+  } = useWorkflowStore();
 
   const nodeColor = useCallback((node: Node) => {
     switch (node.type) {
-      case 'promptNode': return '#7C3AED';
-      case 'llmNode':    return '#2563EB';
-      case 'outputNode': return '#059669';
-      default:           return '#52525B';
+      case 'promptNode':
+        return '#7C3AED';
+      case 'llmNode':
+        return '#2563EB';
+      case 'outputNode':
+        return '#059669';
+      default:
+        return '#52525B';
     }
   }, []);
 
   return (
     // ⚠️ CRITICAL: Container must have explicit dimensions for React Flow to render
-    <div className="w-screen h-screen overflow-hidden bg-[#09090B]">
+    <div className="w-screen h-screen overflow-hidden bg-[#09090B] relative">
       <ReactFlow
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onNodesDelete={onNodesDelete}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.25 }}
+        deleteKeyCode={['Backspace', 'Delete']}
+        nodesFocusable={true}
+        edgesFocusable={true}
         defaultEdgeOptions={{
           type: 'smoothstep',
           style: { stroke: '#52525B', strokeWidth: 2 },
@@ -76,16 +92,22 @@ export function WorkflowCanvas() {
           zoomable
         />
 
+        {/* Live Node & Edge Telemetry Badge */}
         <Panel position="top-right">
-          <div className="flex items-center px-3 py-1.5 rounded-xl bg-[#121214]/80 border border-white/[0.08] backdrop-blur-md">
-            <span className="text-[10px] font-mono text-white/30">
-              {nodes.length} node{nodes.length !== 1 ? 's' : ''} · {edges.length} edge{edges.length !== 1 ? 's' : ''}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#121214]/80 border border-white/[0.08] backdrop-blur-md">
+            <span className="text-[10px] font-mono text-white/40">
+              {nodes.length} node{nodes.length !== 1 ? 's' : ''} · {edges.length} edge
+              {edges.length !== 1 ? 's' : ''}
             </span>
           </div>
         </Panel>
       </ReactFlow>
 
+      {/* Floating Top Control Bar */}
       <TopBar />
+
+      {/* Production Status Footer */}
+      <StatusFooter />
     </div>
   );
 }

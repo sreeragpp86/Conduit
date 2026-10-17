@@ -30,6 +30,8 @@ class FlowEdge(BaseModel):
 class DAGPayload(BaseModel):
     nodes: list[FlowNode]
     edges: list[FlowEdge]
+    api_keys: dict[str, str] = {}
+
 
 
 # Aliases matching both specifications

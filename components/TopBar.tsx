@@ -1,30 +1,63 @@
 'use client';
 
 import { useWorkflowStore } from '@/store/workflowStore';
-import { Play, Plus, Zap, AlertCircle, X } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { Play, Plus, Zap, AlertCircle, X, RotateCcw, Key } from 'lucide-react';
+import { useCallback, useState, useEffect } from 'react';
+import { ApiKeyModal } from './ApiKeyModal';
 
 const BACKEND_URL = 'http://localhost:8000';
 
 type SseEvent =
   | { node_id: string; status: 'RUNNING' }
-  | { node_id: string; status: 'COMPLETED'; output: string }
+  | { node_id: string; status: 'COMPLETED'; output: string; duration_ms?: number }
   | { event: 'PIPELINE_COMPLETE' }
   | { event: 'ERROR'; message: string };
 
 export function TopBar() {
   const {
-    addPromptNode, addLlmNode, addOutputNode,
-    nodes, edges,
-    setNodeStatus, setNodeOutput,
-    setEdgesAnimated, setIsExecuting, isExecuting,
+    addPromptNode,
+    addLlmNode,
+    addOutputNode,
+    nodes,
+    edges,
+    setNodeStatus,
+    setNodeOutput,
+    setEdgesAnimated,
+    setIsExecuting,
+    isExecuting,
     resetNodeStatuses,
+    resetWorkflow,
+    apiKeys,
+    setApiKeys,
   } = useWorkflowStore();
 
   const [error, setError] = useState<string | null>(null);
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  const [hasConfiguredKeys, setHasConfiguredKeys] = useState(false);
+
+  // Load API keys from localStorage on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('conduit_api_keys');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        setApiKeys(parsed);
+        if (parsed.groq || parsed.gemini) {
+          setHasConfiguredKeys(true);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, [setApiKeys]);
+
+  // Update key status indicator whenever apiKeys changes
+  useEffect(() => {
+    setHasConfiguredKeys(Boolean(apiKeys.groq || apiKeys.gemini));
+  }, [apiKeys]);
 
   // ---------------------------------------------------------------------------
-  // SSE-based DAG execution
+  // SSE-based DAG execution with Telemetry & Live Keys
   // ---------------------------------------------------------------------------
   const executeDAG = useCallback(async () => {
     if (isExecuting) return;
@@ -33,6 +66,17 @@ export function TopBar() {
     setIsExecuting(true);
     setEdgesAnimated(true);
 
+    // Retrieve active keys from localStorage or state
+    let activeKeys = { ...apiKeys };
+    try {
+      const stored = localStorage.getItem('conduit_api_keys');
+      if (stored) {
+        activeKeys = { ...activeKeys, ...JSON.parse(stored) };
+      }
+    } catch {
+      // ignore
+    }
+
     try {
       const res = await fetch(`${BACKEND_URL}/api/execute`, {
         method: 'POST',
@@ -40,6 +84,7 @@ export function TopBar() {
         body: JSON.stringify({
           nodes: nodes.map((n) => ({ id: n.id, type: n.type, data: n.data })),
           edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+          api_keys: activeKeys,
         }),
       });
 
@@ -49,8 +94,13 @@ export function TopBar() {
         try {
           const body = await res.json();
           msg = body?.detail ?? body?.message ?? msg;
-        } catch { /* ignore parse error */ }
-        if (res.status === 400 && (msg.toLowerCase().includes('cycle') || msg.toLowerCase().includes('loop'))) {
+        } catch {
+          // ignore parse error
+        }
+        if (
+          res.status === 400 &&
+          (msg.toLowerCase().includes('cycle') || msg.toLowerCase().includes('loop'))
+        ) {
           setError('DAG Error: Infinite loop detected in node connections');
         } else {
           setError(`DAG Error: ${msg}`);
@@ -59,7 +109,6 @@ export function TopBar() {
         setEdgesAnimated(false);
         return;
       }
-
 
       // --- Read the SSE stream ---
       const reader = res.body?.getReader();
@@ -76,7 +125,6 @@ export function TopBar() {
 
         // Split on double-newline (SSE frame separator)
         const frames = buffer.split('\n\n');
-        // Keep the last (potentially incomplete) chunk in the buffer
         buffer = frames.pop() ?? '';
 
         for (const frame of frames) {
@@ -103,14 +151,13 @@ export function TopBar() {
               return;
             }
             if (evt.event === 'PIPELINE_COMPLETE') {
-              // Keep edges green — execution done
               break;
             }
           } else if ('node_id' in evt) {
             if (evt.status === 'RUNNING') {
               setNodeStatus(evt.node_id, 'RUNNING');
             } else if (evt.status === 'COMPLETED') {
-              setNodeStatus(evt.node_id, 'COMPLETED');
+              setNodeStatus(evt.node_id, 'COMPLETED', evt.duration_ms);
               if (evt.output !== undefined) {
                 setNodeOutput(evt.node_id, evt.output);
               }
@@ -120,9 +167,14 @@ export function TopBar() {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      // Friendly message when backend is not running
-      if (msg.includes('fetch') || msg.includes('Failed to fetch') || msg.includes('ECONNREFUSED')) {
-        setError('Cannot connect to backend. Start the FastAPI server: cd backend && uvicorn main:app --reload');
+      if (
+        msg.includes('fetch') ||
+        msg.includes('Failed to fetch') ||
+        msg.includes('ECONNREFUSED')
+      ) {
+        setError(
+          'Cannot connect to backend. Start the FastAPI server: cd backend && uvicorn main:app --reload'
+        );
       } else {
         setError(`Execution failed: ${msg}`);
       }
@@ -131,83 +183,124 @@ export function TopBar() {
       setIsExecuting(false);
     }
   }, [
-    isExecuting, nodes, edges,
-    resetNodeStatuses, setEdgesAnimated, setIsExecuting,
-    setNodeOutput, setNodeStatus,
+    isExecuting,
+    nodes,
+    edges,
+    apiKeys,
+    resetNodeStatuses,
+    setEdgesAnimated,
+    setIsExecuting,
+    setNodeOutput,
+    setNodeStatus,
   ]);
 
+  const handleReset = () => {
+    resetWorkflow();
+    setError(null);
+  };
+
   return (
-    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-2">
-      {/* Main bar */}
-      <div className="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-[#121214]/90 border border-white/10 shadow-2xl shadow-black/60 backdrop-blur-xl">
-        {/* Brand */}
-        <div className="flex items-center gap-2 pr-3 border-r border-white/[0.08]">
-          <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-blue-600">
-            <Zap size={14} className="text-white" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-bold text-white tracking-tight">Conduit</span>
-              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-md bg-violet-500/20 text-violet-400/90 border border-violet-500/20">
-                v0.1.0-alpha
-              </span>
+    <>
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-2">
+        {/* Main Toolbar */}
+        <div className="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-[#121214]/90 border border-white/10 shadow-2xl shadow-black/60 backdrop-blur-xl">
+          {/* Brand */}
+          <div className="flex items-center gap-2 pr-3 border-r border-white/[0.08]">
+            <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-blue-600">
+              <Zap size={14} className="text-white" />
             </div>
-            <p className="text-[9px] font-mono text-white/30 leading-none">DAG Workflow Engine</p>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold text-white tracking-tight">Conduit</span>
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-md bg-violet-500/20 text-violet-400/90 border border-violet-500/20">
+                  v0.1.0-alpha
+                </span>
+              </div>
+              <p className="text-[9px] font-mono text-white/30 leading-none">DAG Workflow Engine</p>
+            </div>
           </div>
+
+          {/* Add node buttons */}
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={addPromptNode}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono text-white/60 hover:text-violet-400 hover:bg-violet-500/10 border border-transparent hover:border-violet-500/20 transition-all duration-150"
+            >
+              <Plus size={11} /> Prompt
+            </button>
+            <button
+              onClick={addLlmNode}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono text-white/60 hover:text-blue-400 hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 transition-all duration-150"
+            >
+              <Plus size={11} /> LLM Agent
+            </button>
+            <button
+              onClick={addOutputNode}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono text-white/60 hover:text-emerald-400 hover:bg-emerald-500/10 border border-transparent hover:border-emerald-500/20 transition-all duration-150"
+            >
+              <Plus size={11} /> Output
+            </button>
+          </div>
+
+          <div className="w-px h-6 bg-white/[0.08]" />
+
+          {/* Reset State Button */}
+          <button
+            onClick={handleReset}
+            disabled={isExecuting}
+            title="Reset execution rings, duration telemetry, and outputs to IDLE"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono text-white/50 hover:text-white/90 hover:bg-white/5 border border-transparent hover:border-white/10 transition-all disabled:opacity-40"
+          >
+            <RotateCcw size={11} />
+            Reset State
+          </button>
+
+          {/* API Keys Configuration Button */}
+          <button
+            onClick={() => setIsKeyModalOpen(true)}
+            className="relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono text-white/60 hover:text-white/90 hover:bg-white/5 border border-transparent hover:border-white/10 transition-all"
+          >
+            <Key size={11} className={hasConfiguredKeys ? 'text-emerald-400' : 'text-white/40'} />
+            API Keys
+            {hasConfiguredKeys && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400/50" />
+            )}
+          </button>
+
+          <div className="w-px h-6 bg-white/[0.08]" />
+
+          {/* Execute DAG Button */}
+          <button
+            onClick={executeDAG}
+            disabled={isExecuting}
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 ${
+              isExecuting
+                ? 'bg-amber-500/20 text-amber-400/80 border border-amber-500/30 cursor-not-allowed'
+                : 'bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 text-white border border-transparent shadow-lg shadow-violet-500/20 hover:shadow-violet-500/30 hover:scale-[1.02] active:scale-[0.98]'
+            }`}
+          >
+            <Play size={11} className={isExecuting ? 'animate-pulse' : ''} />
+            {isExecuting ? 'Executing…' : 'Execute DAG'}
+          </button>
         </div>
 
-        {/* Add node buttons */}
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={addPromptNode}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono text-white/60 hover:text-violet-400 hover:bg-violet-500/10 border border-transparent hover:border-violet-500/20 transition-all duration-150"
-          >
-            <Plus size={11} /> Prompt
-          </button>
-          <button
-            onClick={addLlmNode}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono text-white/60 hover:text-blue-400 hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 transition-all duration-150"
-          >
-            <Plus size={11} /> LLM Agent
-          </button>
-          <button
-            onClick={addOutputNode}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono text-white/60 hover:text-emerald-400 hover:bg-emerald-500/10 border border-transparent hover:border-emerald-500/20 transition-all duration-150"
-          >
-            <Plus size={11} /> Output
-          </button>
-        </div>
-
-        <div className="w-px h-6 bg-white/[0.08]" />
-
-        {/* Execute DAG */}
-        <button
-          onClick={executeDAG}
-          disabled={isExecuting}
-          className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 ${
-            isExecuting
-              ? 'bg-amber-500/20 text-amber-400/80 border border-amber-500/30 cursor-not-allowed'
-              : 'bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 text-white border border-transparent shadow-lg shadow-violet-500/20 hover:shadow-violet-500/30 hover:scale-[1.02] active:scale-[0.98]'
-          }`}
-        >
-          <Play size={11} className={isExecuting ? 'animate-pulse' : ''} />
-          {isExecuting ? 'Executing…' : 'Execute DAG'}
-        </button>
+        {/* Error banner — shown below the top bar */}
+        {error && (
+          <div className="flex items-start gap-2.5 max-w-2xl px-4 py-2.5 rounded-xl bg-red-500/10 border border-red-500/30 shadow-lg shadow-red-500/10 backdrop-blur-xl animate-in slide-in-from-top-2 duration-200">
+            <AlertCircle size={14} className="text-red-400 mt-0.5 shrink-0" />
+            <p className="text-[11px] font-mono text-red-300/90 leading-relaxed flex-1">{error}</p>
+            <button
+              onClick={() => setError(null)}
+              className="text-red-400/60 hover:text-red-300 transition-colors shrink-0"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Error banner — shown below the top bar */}
-      {error && (
-        <div className="flex items-start gap-2.5 max-w-2xl px-4 py-2.5 rounded-xl bg-red-500/10 border border-red-500/30 shadow-lg shadow-red-500/10 backdrop-blur-xl">
-          <AlertCircle size={14} className="text-red-400 mt-0.5 shrink-0" />
-          <p className="text-[11px] font-mono text-red-300/90 leading-relaxed flex-1">{error}</p>
-          <button
-            onClick={() => setError(null)}
-            className="text-red-400/60 hover:text-red-300 transition-colors shrink-0"
-          >
-            <X size={13} />
-          </button>
-        </div>
-      )}
-    </div>
+      {/* API Key Modal */}
+      <ApiKeyModal isOpen={isKeyModalOpen} onClose={() => setIsKeyModalOpen(false)} />
+    </>
   );
 }

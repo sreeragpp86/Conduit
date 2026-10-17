@@ -36,8 +36,9 @@ function PromptNodeComponent({ id, data }: NodeProps<PromptFlowNode>) {
           <p className="text-xs font-semibold text-white/90 truncate">{data.label}</p>
           <p className="text-[10px] text-white/30 font-mono">type:prompt_input</p>
         </div>
-        <NodeStatusRing status={data.status} />
+        <NodeStatusRing status={data.status} duration_ms={data.duration_ms} />
       </div>
+
 
       {/* Body */}
       <div className="px-4 py-3">
